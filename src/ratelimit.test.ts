@@ -47,7 +47,7 @@ describe('normalizeWindows', () => {
       },
       {
         key: 'seven_day',
-        label: 'weekly',
+        label: 'weekly · all models',
         utilization: 0.19,
         resetsAt: new Date(1786082400 * 1000).toISOString(),
       },

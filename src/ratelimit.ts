@@ -59,7 +59,7 @@ export function captureRateLimitHeaders(headers: Headers): Record<string, string
 /** the header names we read, in display order. */
 const WINDOW_SPECS = [
   { key: 'five_hour', label: '5-hour', prefix: 'anthropic-ratelimit-unified-5h' },
-  { key: 'seven_day', label: 'weekly', prefix: 'anthropic-ratelimit-unified-7d' },
+  { key: 'seven_day', label: 'weekly · all models', prefix: 'anthropic-ratelimit-unified-7d' },
 ] as const
 
 /**
