@@ -4,17 +4,24 @@ import { store, type Store } from './store'
 import { notifyChange } from './stream'
 import type { RateLimitWindow } from '../shared/types'
 
-// slow poller for the oauth usage endpoint + the credentials file it reads
-// the token from.
+// collects the account's unified rate-limit windows (5-hour and weekly).
 //
-// this endpoint has a very small budget on a long window — a measured 429 came
-// back with `retry-after: 1963` (~33 min). that means any fixed poll interval
-// shorter than the window keeps the budget permanently spent and the gauge
-// permanently empty, which is exactly what happened before we honoured
-// retry-after. so: poll slowly, and when told to wait, actually wait.
+// SOURCE: the `anthropic-ratelimit-unified-*` response headers on a normal
+// /v1/messages call. we send a deliberately minimal probe (cheapest model,
+// max_tokens 1) purely to read those headers.
+//
+// why not /api/oauth/usage: that endpoint has its own tiny budget on a long
+// window — a measured 429 came back with `retry-after: 1963` (~33 min), so any
+// poll frequent enough to be useful keeps it permanently exhausted. the
+// headers ride a normal inference call instead and are always current.
+//
+// the probe costs a handful of tokens per poll. that is the tradeoff for
+// having live quota numbers at all; FATHOM_RATELIMIT_INTERVAL_SEC controls it.
 
-const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
-const FETCH_TIMEOUT_MS = 10_000
+const MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
+// cheapest model, one token — we want the headers, not the answer
+const PROBE_MODEL = 'claude-haiku-4-5'
+const FETCH_TIMEOUT_MS = 15_000
 
 interface OauthCredentials {
   accessToken?: string
@@ -37,67 +44,63 @@ async function readCredentials(): Promise<OauthCredentials | null> {
 }
 
 /**
- * THE ONE PLACE TO CHANGE once the real response shape is observed — we've
- * never gotten a 200 from this endpoint (see module comment), so this is a
- * tolerant best-guess mapper, not a verified parser. it looks for an array of
- * window-like objects (or treats the payload itself as a single window),
- * pulls a 0..1 utilization out of whatever plausible field name is present,
- * and a reset timestamp likewise. anything it doesn't recognise is dropped;
- * an unrecognised payload shape returns [] rather than throwing.
+ * pull just the unified rate-limit headers out of a response. we keep the raw
+ * header map (not a parsed shape) so a future header we don't map yet is still
+ * captured in the snapshot rather than silently dropped.
+ */
+export function captureRateLimitHeaders(headers: Headers): Record<string, string> {
+  const captured: Record<string, string> = {}
+  headers.forEach((value, name) => {
+    if (name.toLowerCase().startsWith('anthropic-ratelimit-')) captured[name.toLowerCase()] = value
+  })
+  return captured
+}
+
+/** the header names we read, in display order. */
+const WINDOW_SPECS = [
+  { key: 'five_hour', label: '5-hour', prefix: 'anthropic-ratelimit-unified-5h' },
+  { key: 'seven_day', label: 'weekly', prefix: 'anthropic-ratelimit-unified-7d' },
+] as const
+
+/**
+ * map the captured `anthropic-ratelimit-unified-*` headers into windows.
+ * a header set we don't recognise yields [] rather than throwing, so the ui
+ * falls back to rolling token volume instead of showing a fabricated number.
  */
 export function normalizeWindows(raw: unknown): RateLimitWindow[] {
   if (!raw || typeof raw !== 'object') return []
-
-  const candidates: unknown[] = []
-  for (const key of ['windows', 'rate_limits', 'limits', 'usage']) {
-    const v = (raw as Record<string, unknown>)[key]
-    if (Array.isArray(v)) candidates.push(...v)
-  }
-  if (!candidates.length) candidates.push(raw)
+  const h = raw as Record<string, unknown>
 
   const windows: RateLimitWindow[] = []
-  for (const c of candidates) {
-    if (!c || typeof c !== 'object') continue
-    const obj = c as Record<string, unknown>
-
-    const utilization = pickFraction(obj)
+  for (const spec of WINDOW_SPECS) {
+    const utilization = asFraction(h[`${spec.prefix}-utilization`])
     if (utilization === null) continue
-
-    const key =
-      typeof obj.key === 'string'
-        ? obj.key
-        : typeof obj.name === 'string'
-          ? obj.name
-          : `window_${windows.length}`
-    const label = typeof obj.label === 'string' ? obj.label : key
-
-    windows.push({ key, label, utilization, resetsAt: pickResetTime(obj) })
+    windows.push({
+      key: spec.key,
+      label: spec.label,
+      utilization,
+      resetsAt: asIsoTime(h[`${spec.prefix}-reset`]),
+    })
   }
   return windows
 }
 
-function pickFraction(obj: Record<string, unknown>): number | null {
-  for (const key of ['utilization', 'fraction', 'used_fraction', 'usage_fraction']) {
-    const v = obj[key]
-    if (typeof v === 'number' && v >= 0 && v <= 1) return v
-  }
-  for (const key of ['percentage', 'percent', 'used_percent', 'utilization_percent']) {
-    const v = obj[key]
-    if (typeof v === 'number' && v >= 0 && v <= 100) return v / 100
-  }
-  const used = obj.used ?? obj.used_tokens ?? obj.consumed
-  const limit = obj.limit ?? obj.max ?? obj.total
-  if (typeof used === 'number' && typeof limit === 'number' && limit > 0) return used / limit
-  return null
+function asFraction(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+  if (!Number.isFinite(n) || n < 0) return null
+  // documented as a 0..1 fraction; tolerate a 0..100 percentage just in case
+  return n > 1 ? Math.min(n / 100, 1) : n
 }
 
-function pickResetTime(obj: Record<string, unknown>): string | null {
-  for (const key of ['resetsAt', 'reset_at', 'resets_at', 'reset_time', 'resetTime']) {
-    const v = obj[key]
-    if (typeof v === 'string') return v
-    if (typeof v === 'number') return new Date(v > 1e12 ? v : v * 1000).toISOString()
+/** headers carry unix SECONDS; tolerate ms and iso strings too. */
+function asIsoTime(v: unknown): string | null {
+  if (typeof v === 'string' && Number.isNaN(Number(v))) {
+    const parsed = Date.parse(v)
+    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString()
   }
-  return null
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+  if (!Number.isFinite(n) || n <= 0) return null
+  return new Date(n > 1e12 ? n : n * 1000).toISOString()
 }
 
 // what we persist in ratelimit_snapshot.payload — the raw api body plus the
@@ -156,11 +159,10 @@ export async function pollRateLimit(s: Store = store()): Promise<void> {
 
   const creds = await readCredentials()
 
-  // never blank out good data — a failed poll keeps the last good raw payload
-  // and its timestamp. the account metadata is a local file read that doesn't
-  // depend on the api, so keep it fresh even when the poll fails: this
-  // endpoint is heavily rate limited and may never succeed, and losing
-  // "max / default_claude_max_5x" to a 429 would be silly.
+  // never blank out good data — a failed poll keeps the last good headers and
+  // their timestamp. the account metadata is a local file read that doesn't
+  // depend on the api, so keep it fresh even when the probe fails: losing
+  // "max / default_claude_max_5x" to a transient network error would be silly.
   const fail = (error: string) => {
     const carried: StoredPayload = {
       raw: parseStoredPayload(previous?.payload ?? null).raw,
@@ -177,14 +179,28 @@ export async function pollRateLimit(s: Store = store()): Promise<void> {
   }
 
   try {
-    const res = await fetch(USAGE_URL, {
+    const res = await fetch(MESSAGES_URL, {
+      method: 'POST',
       headers: {
         authorization: `Bearer ${creds.accessToken}`,
         'anthropic-beta': 'oauth-2025-04-20',
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
       },
+      body: JSON.stringify({
+        model: PROBE_MODEL,
+        max_tokens: 1,
+        messages: [{ role: 'user', content: '.' }],
+      }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
-    if (!res.ok) {
+
+    // a 429 still carries the rate-limit headers — that IS the interesting
+    // state (you're capped), so read them before treating it as a failure.
+    const raw = captureRateLimitHeaders(res.headers)
+    const hasWindows = normalizeWindows(raw).length > 0
+
+    if (!res.ok && !hasWindows) {
       if (res.status === 429) {
         const until = parseRetryAfter(res.headers.get('retry-after'), fetchedAt)
         if (until) nextAllowedAt = until
@@ -196,7 +212,6 @@ export async function pollRateLimit(s: Store = store()): Promise<void> {
       return
     }
     nextAllowedAt = 0
-    const raw = await res.json().catch(() => null)
     const payload: StoredPayload = {
       raw,
       subscriptionType: creds.subscriptionType ?? null,

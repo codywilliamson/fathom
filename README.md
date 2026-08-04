@@ -10,15 +10,16 @@ more tabbing to a terminal to ask "how much have i used, and can i keep going".
 ## the problem
 
 claude code runs on two machines here — a linux laptop and a windows desktop.
-usage lives in per-machine `~/.claude/projects/**/*.jsonl` transcripts, and
-rate-limit windows live behind an account-scoped api. fathom pulls both onto
+usage lives in per-machine `~/.claude/projects/**/*.jsonl` transcripts, and the
+5-hour / weekly quota windows only surface in api response headers. fathom
+pulls both onto
 one glanceable screen instead of leaving the question unanswered until you go
 check.
 
 ## stack
 
-- **bun** backend: local transcript scanner (`bun:sqlite`), oauth quota
-  poller, rollups, sse live updates
+- **bun** backend: local transcript scanner (`bun:sqlite`), quota-header
+  probe, rollups, sse live updates
 - **vue 3 + vite** spa, hand-written service worker, deep-sea instrument
   panel design language (shared with porthole/buoy/helm)
 - `shared/types.ts` is the single source of truth for the versioned
@@ -58,7 +59,7 @@ windows desktop                        laptop (this machine)
 │   (task scheduler,   │──/api/v1/─────▶         ↓                       │
 │    every 2 min)      │  ingest       │   src/store.ts (bun:sqlite)     │
 └──────────────────────┘               │         ↑                       │
-                                       │   src/ratelimit.ts (oauth poll) │
+                                       │   src/ratelimit.ts (quota hdrs) │
                                        │         ↓                       │
                                        │   src/summary.ts → SSE + REST   │
                                        └────────────┬────────────────────┘
@@ -79,14 +80,19 @@ over-counts tokens by roughly 3x): [docs/design.md](docs/design.md).
   `~/.claude/projects/**/*.jsonl` carries token usage; fathom tails these
   incrementally and dedupes on `message.id`. this is the primary display,
   not a fallback.
-- **the oauth usage endpoint** — best-effort quota percentages, straight from
-  the same token claude code already holds. it is honestly, heavily
-  rate-limited: probing found it 429s far more than it 200s, and design
-  decisions here (slow polling, never refreshing the token ourselves) are
-  built around that. when it doesn't cooperate, the display falls back to
-  rolling token windows computed from the local transcripts, with the stale
-  quota gauge (if there's ever been one) shown with its age rather than
-  hidden.
+- **the unified rate-limit headers** — the 5-hour and weekly quota gauges.
+  `anthropic-ratelimit-unified-*` comes back on every `/v1/messages` response,
+  so fathom sends a minimal probe (cheapest model, `max_tokens: 1`) just to
+  read them. each poll costs a handful of tokens; that's the price of live
+  quota numbers.
+
+  the obvious candidate, `GET /api/oauth/usage`, turned out to be a dead end:
+  it works, but its budget is tiny and its window long — an observed 429 said
+  `retry-after: 1963` (~33 min), so any useful poll rate keeps it permanently
+  exhausted. the headers ride a normal call instead and are always current.
+
+  if the headers ever stop appearing, the gauges fall back to rolling token
+  volume from the transcripts rather than inventing a percentage.
 
 dollar figures throughout are **notional api-equivalent cost** — the author
 is on a Max subscription, so nothing here reflects real spend. it's a way to
@@ -105,7 +111,7 @@ all optional with sane defaults; `src/config.ts` is the only reader. see
 | `FATHOM_CLAUDE_DIR` | `~/.claude` | where the transcripts live |
 | `FATHOM_DB_PATH` | `data/fathom.sqlite` | |
 | `FATHOM_SCAN_INTERVAL_SEC` | `20` | how often to tail the transcripts |
-| `FATHOM_RATELIMIT_INTERVAL_SEC` | `600` | keep it slow — the endpoint is heavily rate limited |
+| `FATHOM_RATELIMIT_INTERVAL_SEC` | `600` | quota probe cadence; each probe costs a few tokens |
 | `FATHOM_ACTIVE_WINDOW_SEC` | `900` | a session is "active" if it had a message this recently |
 | `FATHOM_STALE_SEC` | `300` | a machine is "online" if seen this recently |
 | `FATHOM_INGEST_TOKEN` | empty (check skipped) | shared secret the windows agent sends as `x-fathom-token` |

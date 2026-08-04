@@ -17,7 +17,7 @@ Design and rationale: `docs/design.md`.
 - `src/store.ts` — the `Store` class. ALL sql lives here. takes an injectable
   `Database` so tests use `:memory:` — keep that seam.
 - `src/scanner.ts` — tails `~/.claude/projects/**/*.jsonl` from a byte cursor.
-- `src/ratelimit.ts` — slow poller for the oauth usage endpoint.
+- `src/ratelimit.ts` — quota windows from the unified rate-limit headers.
 - `src/summary.ts` — composes `SummaryResponse`. no sql of its own.
 - `src/stream.ts` — SSE fan-out + `notifyChange()`, the one change emitter.
 - `shared/types.ts` — single source of truth for the `/api/v1` contract. import it,
@@ -35,11 +35,13 @@ Design and rationale: `docs/design.md`.
   idempotent and lets the windows agent retry freely.
 - **cost is notional.** cody is on a max plan; the dollars are what the tokens
   would have cost on the api. label them that way in any new ui.
-- **the oauth usage endpoint may never return 200** — it's heavily rate limited.
-  a 429 is a normal state, not a bug: keep the last good snapshot, show
-  staleness, and let the jsonl-derived rolling windows carry the display.
-  `normalizeWindows()` in `src/ratelimit.ts` is the one place to change when a
-  real response shape is finally observed.
+- **quota windows come from response headers, not a usage endpoint.**
+  `anthropic-ratelimit-unified-*` rides every `/v1/messages` reply, so we send a
+  minimal probe to read them. `GET /api/oauth/usage` looks like the right answer
+  and isn't: its budget is tiny and its window is ~33min, so any useful poll
+  rate keeps it exhausted. if the headers ever vanish, `normalizeWindows()`
+  returns `[]` and the ui falls back to rolling token volume — never a made-up
+  percentage.
 - **never `pkill -f 'bun src/index.ts'`** — every sibling fleet service shares
   that command line. kill by port or pid.
 

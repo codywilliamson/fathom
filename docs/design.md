@@ -56,40 +56,48 @@ the dedup key, enforced as the sqlite primary key so re-ingest is idempotent.
 parsing is incremental: `store` keeps a byte cursor per file so a poll only
 reads what was appended. this matters — there are ~380 transcripts locally.
 
-### 2. oauth usage endpoint (best-effort)
+### 2. unified rate-limit headers (the quota gauges)
 
-`GET https://api.anthropic.com/api/oauth/usage`, bearer token read fresh from
-`~/.claude/.credentials.json` on every poll, plus `anthropic-beta: oauth-2025-04-20`.
+the 5-hour and weekly quota windows come from the
+`anthropic-ratelimit-unified-*` **response headers** on a normal
+`POST /v1/messages` call. we send a deliberately minimal probe — cheapest
+model, `max_tokens: 1` — purely to read the headers:
 
-two things were established by probing it directly:
+```
+anthropic-ratelimit-unified-5h-utilization: 0.26
+anthropic-ratelimit-unified-5h-reset:       1785817800
+anthropic-ratelimit-unified-7d-utilization: 0.19
+anthropic-ratelimit-unified-7d-reset:       1786082400
+anthropic-ratelimit-unified-status:         allowed
+```
 
-- it is **in scope** for the token claude code already holds — the token carries
-  only `user:inference`, and an out-of-scope endpoint (`/api/oauth/profile`)
-  returns 403 while this one returns 429.
-- it has a **very small budget on a long window**. six probes spaced 45s apart
-  all returned 429, and a later 429 carried `retry-after: 1963` — about 33
-  minutes. that number is the important one: **any fixed poll interval shorter
-  than the window keeps the budget permanently spent**, so a naive 10-minute
-  poller never succeeds and the gauge never fills. we honour `retry-after` and
-  skip polls until it expires, which is both correct client behaviour and the
-  only way this endpoint ever returns data.
+**why not `GET /api/oauth/usage`**, which is the obvious candidate and was the
+original design: it's real and in scope for the token claude code already holds
+(an out-of-scope endpoint returns 403; this one returns 429), but it has a tiny
+budget on a long window. six probes spaced 45s apart all returned 429, and a
+later 429 carried `retry-after: 1963` — about 33 minutes. any poll frequent
+enough to be useful keeps that budget permanently spent, so the gauge never
+fills. the headers ride an ordinary inference call instead and are always
+current.
 
-design consequences, all of which are load-bearing rather than defensive
-boilerplate:
+the tradeoff is that each poll costs a handful of tokens. that's the price of
+having live quota numbers at all; `FATHOM_RATELIMIT_INTERVAL_SEC` controls it.
 
-- poll on a slow interval (default 10 min), never on request.
+other load-bearing details:
+
 - **never refresh the token ourselves.** claude code owns that refresh; racing it
-  risks invalidating the refresh token. read whatever is on disk, and if it is
-  expired, degrade.
+  risks invalidating the refresh token. read `~/.claude/.credentials.json` fresh
+  on every poll and, if it's expired, degrade.
+- **a 429 still carries the headers** — and "you are capped" is precisely the
+  interesting state, so we read them before treating the response as a failure.
+- we store the captured header map, not a parsed shape, so a header we don't map
+  yet is still in the snapshot rather than silently dropped.
 - cache the last good snapshot and render it with a visible age. a stale gauge
-  beats a blank one.
-- **the rolling-window tiles derived from jsonl are the primary display, not the
-  fallback.** "tokens in the last 5 hours" is always computable from local data;
-  the quota percentage is a bonus when the api cooperates.
-
-the response schema is currently unknown (never got a 200). `src/ratelimit.ts`
-normalizes into `RateLimitWindow[]` behind a mapper and stores the raw payload,
-so adapting to the real shape is a one-function change.
+  beats a blank one, and `subscriptionType`/`rateLimitTier` come from a local
+  file read that works even when the network doesn't.
+- if the headers ever stop appearing, `normalizeWindows()` returns `[]` and the
+  ui falls back to rolling token volume from the transcripts rather than showing
+  a fabricated percentage.
 
 ### 3. cost
 
