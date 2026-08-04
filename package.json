@@ -1,0 +1,24 @@
+{
+  "name": "fathom",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "dev:web": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "3.5.39"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "@vitejs/plugin-vue": "6.0.7",
+    "typescript": "5.9.3",
+    "vite": "8.1.3",
+    "vue-tsc": "3.3.6"
+  }
+}
