@@ -5,8 +5,13 @@ import { notifyChange } from './stream'
 import type { RateLimitWindow } from '../shared/types'
 
 // slow poller for the oauth usage endpoint + the credentials file it reads
-// the token from. this endpoint is aggressively rate limited (six probes 45s
-// apart all 429'd during design) so we poll slowly and never retry tightly.
+// the token from.
+//
+// this endpoint has a very small budget on a long window — a measured 429 came
+// back with `retry-after: 1963` (~33 min). that means any fixed poll interval
+// shorter than the window keeps the budget permanently spent and the gauge
+// permanently empty, which is exactly what happened before we honoured
+// retry-after. so: poll slowly, and when told to wait, actually wait.
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 const FETCH_TIMEOUT_MS = 10_000
@@ -119,9 +124,36 @@ export function parseStoredPayload(payload: string | null): StoredPayload {
   }
 }
 
+/**
+ * earliest time we're allowed to call the endpoint again, per the last 429's
+ * `retry-after`. this matters more than it looks: the endpoint's budget is
+ * tiny and its window is long (an observed retry-after was 1963s — ~33min),
+ * so a fixed poll interval shorter than that keeps the budget permanently
+ * exhausted and the gauge permanently empty. honouring retry-after is both
+ * the polite thing to do and the only way this ever returns data.
+ */
+let nextAllowedAt = 0
+
+/** seconds until the endpoint will talk to us again; 0 when it's ready. */
+export function cooldownRemainingSec(nowMs: number = Date.now()): number {
+  return Math.max(0, Math.ceil((nextAllowedAt - nowMs) / 1000))
+}
+
+export function parseRetryAfter(header: string | null, nowMs: number): number | null {
+  if (!header) return null
+  const seconds = Number(header)
+  if (Number.isFinite(seconds) && seconds >= 0) return nowMs + seconds * 1000
+  const asDate = Date.parse(header) // retry-after may also be an http date
+  return Number.isNaN(asDate) ? null : asDate
+}
+
 export async function pollRateLimit(s: Store = store()): Promise<void> {
   const previous = s.loadRateLimit()
   const fetchedAt = Date.now()
+
+  // still cooling down from a 429 — don't spend the budget we don't have
+  if (fetchedAt < nextAllowedAt) return
+
   const creds = await readCredentials()
 
   // never blank out good data — a failed poll keeps the last good raw payload
@@ -153,9 +185,17 @@ export async function pollRateLimit(s: Store = store()): Promise<void> {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
     if (!res.ok) {
+      if (res.status === 429) {
+        const until = parseRetryAfter(res.headers.get('retry-after'), fetchedAt)
+        if (until) nextAllowedAt = until
+        const wait = cooldownRemainingSec(fetchedAt)
+        fail(wait ? `http 429 — retrying in ${wait}s` : 'http 429')
+        return
+      }
       fail(`http ${res.status}`)
       return
     }
+    nextAllowedAt = 0
     const raw = await res.json().catch(() => null)
     const payload: StoredPayload = {
       raw,
@@ -176,7 +216,11 @@ export function startRateLimitPoller(): void {
     } catch (err) {
       console.error('ratelimit: poll failed', err)
     }
-    setTimeout(tick, config.rateLimitIntervalSec * 1000)
+    // wait out any server-imposed cooldown, then resume the normal cadence.
+    // +1s so we land just after the window opens rather than a hair before.
+    const cooldownMs = cooldownRemainingSec() * 1000
+    const delay = Math.max(config.rateLimitIntervalSec * 1000, cooldownMs + 1000)
+    setTimeout(tick, delay)
   }
   tick()
 }

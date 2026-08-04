@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { normalizeWindows, parseStoredPayload } from './ratelimit'
+import {
+  cooldownRemainingSec,
+  normalizeWindows,
+  parseRetryAfter as parseRetryAfterForTest,
+  parseStoredPayload,
+} from './ratelimit'
 
 describe('normalizeWindows', () => {
   test('returns [] for null/non-object/unrecognised payloads', () => {
@@ -82,5 +87,31 @@ describe('stored payload — regression: account metadata survives a failed poll
   test('a payload carrying metadata still yields no windows', () => {
     const carried = JSON.stringify({ raw: null, subscriptionType: 'max', rateLimitTier: 't' })
     expect(normalizeWindows(parseStoredPayload(carried).raw)).toEqual([])
+  })
+})
+
+describe('cooldown — honouring retry-after', () => {
+  // the endpoint's budget is tiny and its window long (an observed retry-after
+  // was 1963s). polling faster than that keeps it permanently exhausted, which
+  // is exactly why the gauge stayed empty before this existed.
+  test('reports no cooldown when nothing has 429d', () => {
+    expect(cooldownRemainingSec(Date.now())).toBe(0)
+  })
+
+  test('a numeric retry-after parses to an absolute instant', () => {
+    const now = Date.parse('2026-08-04T00:00:00.000Z')
+    expect(parseRetryAfterForTest('1963', now)).toBe(now + 1963_000)
+  })
+
+  test('an http-date retry-after also parses', () => {
+    const now = Date.parse('2026-08-04T00:00:00.000Z')
+    const when = 'Tue, 04 Aug 2026 00:30:00 GMT'
+    expect(parseRetryAfterForTest(when, now)).toBe(Date.parse(when))
+  })
+
+  test('a missing or junk retry-after yields null rather than throwing', () => {
+    const now = Date.now()
+    expect(parseRetryAfterForTest(null, now)).toBeNull()
+    expect(parseRetryAfterForTest('soon-ish', now)).toBeNull()
   })
 })

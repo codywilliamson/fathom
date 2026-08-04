@@ -66,8 +66,13 @@ two things were established by probing it directly:
 - it is **in scope** for the token claude code already holds — the token carries
   only `user:inference`, and an out-of-scope endpoint (`/api/oauth/profile`)
   returns 403 while this one returns 429.
-- it is **aggressively rate limited**. six probes spaced 45s apart all returned
-  429, so something else already consumes its budget.
+- it has a **very small budget on a long window**. six probes spaced 45s apart
+  all returned 429, and a later 429 carried `retry-after: 1963` — about 33
+  minutes. that number is the important one: **any fixed poll interval shorter
+  than the window keeps the budget permanently spent**, so a naive 10-minute
+  poller never succeeds and the gauge never fills. we honour `retry-after` and
+  skip polls until it expires, which is both correct client behaviour and the
+  only way this endpoint ever returns data.
 
 design consequences, all of which are load-bearing rather than defensive
 boilerplate:
