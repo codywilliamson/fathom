@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import type { MachineStatus } from '../../../shared/types'
-import { fmtAge } from '../format'
+import { fmtAge, fmtUsd } from '../format'
 
-defineProps<{ machines: MachineStatus[] }>()
+const props = withDefaults(defineProps<{ machines: MachineStatus[]; costByMachine?: Record<string, number> }>(), {
+  costByMachine: () => ({}),
+})
+
+function meta(m: MachineStatus): string {
+  const cost = props.costByMachine[m.machine]
+  const costPart = cost ? ` · ${fmtUsd(cost)} 30d` : ''
+  return `${m.activeSessions} active · ${fmtAge(m.lastSeen)}${costPart}`
+}
 </script>
 
 <template>
@@ -11,7 +19,7 @@ defineProps<{ machines: MachineStatus[] }>()
       <span class="dot no-select" :class="m.online ? 'dot-ok' : 'dot-off'" aria-hidden="true"></span>
       <div class="machine-body">
         <span class="machine-name mono">{{ m.machine }}</span>
-        <span class="machine-meta mono dim">{{ m.activeSessions }} active &middot; {{ fmtAge(m.lastSeen) }}</span>
+        <span class="machine-meta mono dim">{{ meta(m) }}</span>
       </div>
     </div>
     <p v-if="machines.length === 0" class="empty mono dim">no machines seen yet</p>

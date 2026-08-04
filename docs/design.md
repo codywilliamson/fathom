@@ -157,10 +157,16 @@ landscape 1280x800, deep-sea instrument panel language, tokens from
 
 layout, glanceable from across a room:
 
-- two large arc gauges: 5-hour and weekly quota (or, when the api is stale,
-  rolling token volume with the staleness noted).
-- a cost + token sparkline over the last 30 days.
-- a per-machine strip: laptop / desktop, online lamp, active session count.
+- a row of quota progress-bar cards, one per window the unified rate-limit
+  headers report (5-hour, weekly · all models, and any window anthropic adds
+  later — the grid is generic over however many come back). falls back to
+  rolling token volume, staleness noted, when the api has no quota data.
+- usage breakdown bars by model and by project over the last 30 days, plus
+  24h/7d/30d stat tiles — swapped in for the old token/cost line sparklines,
+  which read as noise at kiosk viewing distance and didn't answer "where did
+  it go".
+- a per-machine strip: laptop / desktop, online lamp, active session count,
+  30-day cost.
 - a live session list: project, model, tokens, age.
 
 the tablet is a display, not a control surface — no write actions in the ui.

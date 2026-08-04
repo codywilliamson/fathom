@@ -2,34 +2,20 @@
 import { computed } from 'vue'
 import { updateReady, applyUpdate } from './composables/useAppUpdate'
 import { useSummary } from './composables/useSummary'
-import ArcGauge from './components/ArcGauge.vue'
-import Sparkline from './components/Sparkline.vue'
+import QuotaCard from './components/QuotaCard.vue'
+import BreakdownBars from './components/BreakdownBars.vue'
 import StatTile from './components/StatTile.vue'
 import MachineStrip from './components/MachineStrip.vue'
 import SessionList from './components/SessionList.vue'
 import { fmtAge, fmtPct, fmtResetsIn, fmtTokens, fmtUsd, totalTokens } from './format'
-import type { RateLimitWindow } from '../../shared/types'
 
 const { summary, connected, loaded } = useSummary()
 
 // a quota reading older than this reads as stale even if ok:true
 const QUOTA_STALE_MS = 15 * 60 * 1000
 
-function findWindow(windows: RateLimitWindow[], patterns: RegExp[]) {
-  return windows.find((w) => patterns.some((p) => p.test(w.label) || p.test(w.key)))
-}
-
 const windows = computed(() => summary.value?.rateLimit.windows ?? [])
 const hasQuota = computed(() => windows.value.length > 0)
-
-const fiveHourWindow = computed(
-  () => findWindow(windows.value, [/5.?\s?hour/i, /five.?hour/i]) ?? windows.value[0]
-)
-const weeklyWindow = computed(() => {
-  const found = findWindow(windows.value, [/week/i, /7.?\s?day/i, /seven.?day/i])
-  if (found) return found
-  return windows.value.find((w) => w !== fiveHourWindow.value)
-})
 
 const quotaStale = computed(() => {
   const rl = summary.value?.rateLimit
@@ -37,38 +23,44 @@ const quotaStale = computed(() => {
   return Date.now() - new Date(rl.fetchedAt).getTime() > QUOTA_STALE_MS
 })
 
-function quotaGauge(win: RateLimitWindow | undefined, fallbackLabel: string, fallbackTokens: number) {
-  if (hasQuota.value && win) {
-    return {
-      label: `${win.label} quota`,
-      value: win.utilization,
-      reading: fmtPct(win.utilization),
-      caption: fmtResetsIn(win.resetsAt) ?? fmtAge(summary.value?.rateLimit.fetchedAt ?? null),
-      stale: quotaStale.value,
-    }
-  }
-  return {
-    label: fallbackLabel,
-    value: 0,
-    reading: fmtTokens(fallbackTokens),
-    caption: 'quota data unavailable',
-    stale: true,
-  }
-}
-
-const gauge5h = computed(() =>
-  quotaGauge(fiveHourWindow.value, '5-hour volume', totalTokens(summary.value?.totals.last5h.tokens ?? zeroTokens()))
-)
-const gauge7d = computed(() =>
-  quotaGauge(weeklyWindow.value, '7-day volume', totalTokens(summary.value?.totals.last7d.tokens ?? zeroTokens()))
-)
-
 function zeroTokens() {
   return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 }
 }
 
-const dailyTokens = computed(() => (summary.value?.daily ?? []).map((b) => totalTokens(b.tokens)))
-const dailyCost = computed(() => (summary.value?.daily ?? []).map((b) => b.costUsd))
+// one card per quota window the api reports — grows or shrinks automatically
+// if anthropic adds or drops a window, no layout change needed. falls back to
+// rolling token volume for 5h/7d when the api has no quota data at all.
+const quotaCards = computed(() => {
+  if (hasQuota.value) {
+    return windows.value.map((w) => ({
+      key: w.key,
+      label: `${w.label} quota`,
+      value: w.utilization,
+      reading: fmtPct(w.utilization),
+      caption: fmtResetsIn(w.resetsAt) ?? fmtAge(summary.value?.rateLimit.fetchedAt ?? null),
+      stale: quotaStale.value,
+    }))
+  }
+  const t = summary.value?.totals
+  return [
+    {
+      key: 'last5h',
+      label: '5-hour volume',
+      value: 0,
+      reading: fmtTokens(totalTokens(t?.last5h.tokens ?? zeroTokens())),
+      caption: 'quota data unavailable',
+      stale: true,
+    },
+    {
+      key: 'last7d',
+      label: '7-day volume',
+      value: 0,
+      reading: fmtTokens(totalTokens(t?.last7d.tokens ?? zeroTokens())),
+      caption: 'quota data unavailable',
+      stale: true,
+    },
+  ]
+})
 
 const statTiles = computed(() => {
   const t = summary.value?.totals
@@ -79,6 +71,8 @@ const statTiles = computed(() => {
     { label: '30d', value: fmtTokens(totalTokens(t.last30d.tokens)), caption: `${fmtUsd(t.last30d.costUsd)} est. api equiv` },
   ]
 })
+
+const costByMachine = computed(() => Object.fromEntries((summary.value?.byMachine ?? []).map((b) => [b.key, b.costUsd])))
 
 const generatedAge = computed(() => fmtAge(summary.value?.generatedAt ?? null))
 </script>
@@ -94,49 +88,31 @@ const generatedAge = computed(() => fmtAge(summary.value?.generatedAt ?? null))
       <p v-if="!loaded" class="loading mono dim">reading usage…</p>
 
       <div v-else class="dashboard">
-        <section class="gauges">
-          <ArcGauge
-            :label="gauge5h.label"
-            :value="gauge5h.value"
-            :reading="gauge5h.reading"
-            :caption="gauge5h.caption"
-            :stale="gauge5h.stale"
-          />
-          <ArcGauge
-            :label="gauge7d.label"
-            :value="gauge7d.value"
-            :reading="gauge7d.reading"
-            :caption="gauge7d.caption"
-            :stale="gauge7d.stale"
+        <section class="quota-cards">
+          <QuotaCard
+            v-for="c in quotaCards"
+            :key="c.key"
+            :label="c.label"
+            :value="c.value"
+            :reading="c.reading"
+            :caption="c.caption"
+            :stale="c.stale"
           />
         </section>
 
-        <section class="trend">
-          <div class="trend-block">
-            <div class="trend-head no-select">
-              <span class="trend-label mono dim">tokens · 30d</span>
-            </div>
-            <div class="trend-chart teal-ink">
-              <Sparkline :values="dailyTokens" />
-            </div>
-          </div>
-          <div class="trend-block">
-            <div class="trend-head no-select">
-              <span class="trend-label mono dim">est. api equiv · 30d</span>
-            </div>
-            <div class="trend-chart accent-ink">
-              <Sparkline :values="dailyCost" />
-            </div>
-          </div>
-          <div class="stats">
-            <StatTile v-for="s in statTiles" :key="s.label" :label="s.label" :value="s.value" :caption="s.caption" />
-          </div>
+        <section class="kpi-row">
+          <StatTile v-for="s in statTiles" :key="s.label" :label="s.label" :value="s.value" :caption="s.caption" />
+        </section>
+
+        <section class="breakdowns">
+          <BreakdownBars title="by model · 30d" :items="summary?.byModel ?? []" />
+          <BreakdownBars title="by project · 30d" :items="summary?.byProject ?? []" />
         </section>
 
         <aside class="side">
           <div class="side-block">
             <h2 class="side-title mono dim no-select">machines</h2>
-            <MachineStrip :machines="summary?.machines ?? []" />
+            <MachineStrip :machines="summary?.machines ?? []" :cost-by-machine="costByMachine" />
           </div>
           <div class="side-block sessions-block">
             <h2 class="side-title mono dim no-select">active sessions</h2>
@@ -200,80 +176,46 @@ const generatedAge = computed(() => fmtAge(summary.value?.generatedAt ?? null))
   font-size: var(--text-sm);
 }
 
-/* landscape kiosk grid: gauges dominate the top-left, trend + stats beneath,
-   machines/sessions ride alongside as a side column */
+/* landscape kiosk grid: quota cards on top, a kpi strip beneath, breakdowns
+   filling the rest, machines/sessions ride alongside as a side column */
 .dashboard {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   gap: var(--space-5);
   height: 100%;
   min-height: 0;
 }
 
-.gauges {
+.quota-cards {
   grid-column: 1;
   grid-row: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-5);
 }
 
-.gauges > * {
-  flex: 1;
-  min-width: 0;
-}
-
-.trend {
+.kpi-row {
   grid-column: 1;
   grid-row: 2;
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: var(--space-4);
+}
+
+.breakdowns {
+  grid-column: 1;
+  grid-row: 3;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
   align-items: stretch;
   min-height: 0;
 }
 
-.trend-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: var(--space-3) var(--space-4);
-  background: var(--glass);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-}
-
-.trend-label {
-  font-size: var(--text-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.trend-chart {
-  flex: 1;
-  min-height: 48px;
-}
-
-.teal-ink {
-  color: var(--teal);
-}
-
-.accent-ink {
-  color: var(--accent);
-}
-
-.stats {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  justify-content: center;
-  min-width: 180px;
-}
-
 .side {
   grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-row: 1 / span 3;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -313,22 +255,13 @@ const generatedAge = computed(() => fmtAge(summary.value?.generatedAt ?? null))
     min-height: 100%;
   }
 
-  .gauges {
-    flex-direction: column;
-  }
-
-  .trend {
+  .breakdowns {
     display: flex;
     flex-direction: column;
   }
 
-  .stats {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-
-  .stats > * {
-    flex: 1 1 140px;
+  .kpi-row {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
   .side {
