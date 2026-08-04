@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- fathom mark: a sounding line with depth ticks and a plumb bob -->
+  <rect width="512" height="512" rx="96" fill="#05080a"/>
+  <line x1="256" y1="88" x2="256" y2="350" stroke="#ffb454" stroke-width="14" stroke-linecap="round"/>
+  <line x1="238" y1="150" x2="274" y2="150" stroke="#ffb454" stroke-width="10" stroke-linecap="round"/>
+  <line x1="230" y1="210" x2="282" y2="210" stroke="#ffb454" stroke-width="10" stroke-linecap="round"/>
+  <line x1="222" y1="270" x2="290" y2="270" stroke="#ffb454" stroke-width="10" stroke-linecap="round"/>
+  <polygon points="256,330 302,376 256,422 210,376" fill="#ffb454"/>
+</svg>

@@ -1,0 +1,168 @@
+/* fathom — design tokens (inherited from porthole)
+   concept: deep-sea instrument panel. ink-dark glass, brass/amber
+   telemetry glow, monospace readouts. calm, slow, legible. */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg-0: #05080a; /* void behind everything */
+  --bg-1: #0a1013; /* app shell panels */
+  --bg-2: #101a1e; /* raised cards / rows */
+  --bg-2-hover: #16232a;
+  --glass: rgba(12, 18, 21, 0.62); /* translucent panel over background */
+  --glass-strong: rgba(9, 14, 17, 0.82);
+
+  /* borders */
+  --line: rgba(219, 230, 228, 0.09);
+  --line-strong: rgba(219, 230, 228, 0.16);
+
+  /* ink levels */
+  --ink-1: #eef4f2;
+  --ink-2: #9fb3af;
+  --ink-3: #62726f;
+
+  /* accent: bioluminescent green — fathom's own signal, distinct from
+     buoy's amber and from the shared teal secondary glow below */
+  --accent: #5eff8a;
+  --accent-strong: #a8ffc4;
+  --accent-ink: #04240f;
+  --accent-dim: rgba(94, 255, 138, 0.16);
+  --accent-line: rgba(94, 255, 138, 0.4);
+
+  /* secondary glow: deep teal bioluminescence, used sparingly */
+  --teal: #4fd6c4;
+  --teal-dim: rgba(79, 214, 196, 0.14);
+
+  /* danger */
+  --danger: #ff6b5f;
+  --danger-dim: rgba(255, 107, 95, 0.14);
+  --danger-line: rgba(255, 107, 95, 0.4);
+
+  /* radii */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* type scale */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 26px;
+
+  --font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-0);
+  color: var(--ink-1);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+#app {
+  position: relative;
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+}
+
+/* thin, quiet scrollbars where they show */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: var(--radius-pill);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.dim {
+  color: var(--ink-3);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ui chrome (titles, meta, badges, section labels) — not content users copy */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
