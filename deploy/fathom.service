@@ -1,0 +1,12 @@
+[Unit]
+Description=fathom tailnet pwa (port 4950)
+After=network-online.target tailscaled.service
+
+[Service]
+WorkingDirectory=/home/shockbirds/dev/fathom
+ExecStart=/home/shockbirds/.bun/bin/bun src/index.ts
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
