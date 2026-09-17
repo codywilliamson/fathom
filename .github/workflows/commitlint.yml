@@ -9,21 +9,29 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  merge_group:
   workflow_dispatch:
+    inputs:
+      from:
+        description: Starting commit SHA
+        required: true
+        type: string
+      to:
+        description: Ending commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   commitlint:
-    uses: codywilliamson/commit-guard/.github/workflows/commitlint.yml@v0.2.2
-    with:
-      ## config preset: conventional, angular
-      config: "conventional"
-      ## PR lint strategy: smart, commits, title
-      pr-mode: "smart"
-      ## optional: skip known noisy subjects
-      # ignore-message-patterns: |
-      #   ^Initial plan$
-    permissions:
-      contents: read
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: codywilliamson/commit-guard@v0.3.1
+        with:
+          mode: commits
+          token: ${{ github.token }}
+          from: ${{ inputs.from }}
+          to: ${{ inputs.to }}
